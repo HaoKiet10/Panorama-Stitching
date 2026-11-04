@@ -1,0 +1,21 @@
+# build output
+stitch
+stitch.exe
+*.exp
+*.lib
+*.obj
+*.pdb
+
+# run output
+out/
+
+# photos and prepared images live on the team's Google Drive, not in git
+raw/
+dataset/
+
+# editor / OS / Python
+.vscode/
+.ipynb_checkpoints/
+__pycache__/
+Thumbs.db
+.DS_Store

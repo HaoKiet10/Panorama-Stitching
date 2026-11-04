@@ -1,0 +1,6 @@
+# Python packages for tools/prepare_dataset.py and the notebook (all preinstalled on Colab)
+# Install locally with: pip install -r requirements.txt
+numpy>=1.24
+Pillow>=10.0
+pandas>=2.0
+matplotlib>=3.7
