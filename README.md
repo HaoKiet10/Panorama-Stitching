@@ -12,7 +12,7 @@ Makefile                   Linux / Colab build
 build.bat                  Windows build (CUDA Toolkit + Visual Studio Build Tools)
 src/
   common.h                 shared types, parameters, ORB pattern, RANSAC samples, homography helpers
-  versions.h               the run_vN interface and the version table
+  versions.h               the runVN interface and the version table
   cuda_utils.cuh           CHECK macro, CUDA-event GpuTimer, GPU name
   main.cu                  command line, image I/O, warm-up, repeated runs, timing report
   stb_impl.cpp             stb_image / stb_image_write implementation

@@ -14,21 +14,30 @@
 //   * the data types passed between stages      (ImageU8, ImageF, Keypoint, Descriptor, Match)
 //   * the parameters of every stage             (Params)
 //   * the timing and result records             (Timing, Result)
-//   * the ORB sampling pattern                  (make_orb_pattern)
-//   * the RANSAC random samples                 (make_ransac_samples)
-//   * small homography utilities                (apply_h, invert_h, corner_error)
+//   * the ORB sampling pattern                  (makeOrbPattern)
+//   * the RANSAC random samples                 (makeRansacSamples)
+//   * small homography utilities                (applyH, invertH, cornerError)
 //
 // The random parts (ORB pattern, RANSAC samples) are generated ONCE on the host by a
 // fixed-seed generator, then handed to the CPU or GPU code. This way V0 and V1 test exactly
 // the same point pairs and exactly the same RANSAC hypotheses, so their outputs can be
 // compared directly.
 //
-// Everything here is plain C++ (no CUDA), so it can be included from .cpp and .cu files.
+// Everything here can be included from .cpp and .cu files. The small helpers marked
+// HOST_DEVICE can be called from host code AND from CUDA kernels.
 #pragma once
 
 #include <cstdint>
 #include <cmath>
 #include <vector>
+
+// __host__ __device__ when compiled by nvcc (.cu files), nothing for the plain C++ compiler
+// (.cpp files such as v0_sequential.cpp), which does not know these keywords.
+#ifdef __CUDACC__
+#define HOST_DEVICE __host__ __device__
+#else
+#define HOST_DEVICE
+#endif
 
 // =====================================================================================
 // Stages
@@ -130,7 +139,7 @@ struct Timing {
     double stage_ms[NUM_STAGES] = {0, 0, 0, 0, 0, 0};  // per stage (A and B summed for 1-3)
     double h2d_ms = 0;          // host -> device copies (GPU versions only)
     double d2h_ms = 0;          // device -> host copies (GPU versions only)
-    double total_ms = 0;        // end to end, from the start to the end of run_vN
+    double total_ms = 0;        // end to end, from the start to the end of runVN
 };
 
 // What a run produces. main.cu prints the counts and H, and saves the panorama.
@@ -172,7 +181,7 @@ struct OrbPair { int8_t x1, y1, x2, y2; };
 // Generates the 256 offset pairs. Every point lies inside a circle of radius
 // (orb_radius - 2), so after rotating it by any angle and rounding, it still fits in the
 // patch (and, with Params::border, inside the image).
-inline std::vector<OrbPair> make_orb_pattern(uint32_t seed, int orb_radius) {
+inline std::vector<OrbPair> makeOrbPattern(uint32_t seed, int orb_radius) {
     Lcg rng(seed);
     const int r = orb_radius - 2;
     std::vector<OrbPair> pattern;
@@ -199,7 +208,7 @@ inline std::vector<OrbPair> make_orb_pattern(uint32_t seed, int orb_radius) {
 // The 4 indices of one hypothesis are always different.
 // Returns an empty vector if there are fewer than 4 matches (no homography possible).
 // Generating them on the host lets the GPU test exactly the same hypotheses as V0.
-inline std::vector<int> make_ransac_samples(int num_matches, int iters, uint32_t seed) {
+inline std::vector<int> makeRansacSamples(int num_matches, int iters, uint32_t seed) {
     std::vector<int> samples;
     if (num_matches < 4) return samples;
     samples.resize((size_t)iters * 4);
@@ -219,13 +228,17 @@ inline std::vector<int> make_ransac_samples(int num_matches, int iters, uint32_t
 }
 
 // =====================================================================================
-// Small numeric helpers
+// Small numeric helpers (usable on both host and device)
 // =====================================================================================
 
-// Rounds to the nearest integer; an exact .5 always rounds up (floor(v + 0.5)).
+// Helper: clamp v into [lo, hi]. Use it to read pixels outside the image as the nearest edge
+// pixel ("clamp to edge"), e.g. img.data[clampInt(y, 0, h - 1) * w + clampInt(x, 0, w - 1)].
+HOST_DEVICE inline int clampInt(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+// Helper: round to the nearest integer; an exact .5 always rounds up (floor(v + 0.5)).
 // Use THIS everywhere a coordinate is rounded (e.g. rotated ORB offsets), on the CPU and the
 // GPU: lroundf, rintf and __float2int_rn round .5 differently and would make V0 and V1 differ.
-inline int round_to_int(float v) { return (int)floorf(v + 0.5f); }
+HOST_DEVICE inline int roundToInt(float v) { return (int)floorf(v + 0.5f); }
 
 // =====================================================================================
 // Homography helpers (host side)
@@ -238,7 +251,7 @@ inline int round_to_int(float v) { return (int)floorf(v + 0.5f); }
 // with w = H6 x + H7 y + H8.
 
 // Applies H to the point (x, y); the result is written to (ox, oy).
-inline void apply_h(const double H[9], double x, double y, double& ox, double& oy) {
+inline void applyH(const double H[9], double x, double y, double& ox, double& oy) {
     double w = H[6] * x + H[7] * y + H[8];
     ox = (H[0] * x + H[1] * y + H[2]) / w;
     oy = (H[3] * x + H[4] * y + H[5]) / w;
@@ -246,7 +259,7 @@ inline void apply_h(const double H[9], double x, double y, double& ox, double& o
 
 // Inverts a 3x3 matrix with the adjugate formula (inverse = adjugate / determinant).
 // Returns false if the matrix is (nearly) singular. Stage 6 needs H^-1 for inverse warping.
-inline bool invert_h(const double H[9], double Hi[9]) {
+inline bool invertH(const double H[9], double Hi[9]) {
     double det = H[0] * (H[4] * H[8] - H[5] * H[7]) - H[1] * (H[3] * H[8] - H[5] * H[6]) +
                  H[2] * (H[3] * H[7] - H[4] * H[6]);
     if (fabs(det) < 1e-12) return false;
@@ -267,14 +280,14 @@ inline bool invert_h(const double H[9], double Hi[9]) {
 // maps image B's four corners with H and with a reference G and averages the distances.
 // Used for the synthetic-pair check (G = ground truth, --gt) and to check that a GPU
 // version agrees with V0 (G = V0's H, --ref-h). Below ~2 px is a good result.
-inline double corner_error(const double H[9], const double G[9], int width, int height) {
+inline double cornerError(const double H[9], const double G[9], int width, int height) {
     const double cx[4] = {0, (double)width, 0, (double)width};
     const double cy[4] = {0, 0, (double)height, (double)height};
     double sum = 0;
     for (int i = 0; i < 4; i++) {
         double hx, hy, gx, gy;
-        apply_h(H, cx[i], cy[i], hx, hy);
-        apply_h(G, cx[i], cy[i], gx, gy);
+        applyH(H, cx[i], cy[i], hx, hy);
+        applyH(G, cx[i], cy[i], gx, gy);
         sum += sqrt((hx - gx) * (hx - gx) + (hy - gy) * (hy - gy));
     }
     return sum / 4;

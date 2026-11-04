@@ -12,9 +12,9 @@
 //   * main.cu looks the requested version up in VERSIONS and calls it.
 //
 // Adding a new version (e.g. V2):
-//   1. write  void run_v2(...)  in its own file, e.g. src/v2_<idea>.cu
-//   2. declare it below, next to run_v0 / run_v1
-//   3. add a row  {2, "V2 <idea>", run_v2}  to VERSIONS
+//   1. write  void runV2(...)  in its own file, e.g. src/v2_<idea>.cu
+//   2. declare it below, next to runV0 / runV1
+//   3. add a row  {2, "V2 <idea>", runV2}  to VERSIONS
 //   4. add the new file to SRC in the Makefile and to the nvcc line in build.bat
 #pragma once
 
@@ -31,8 +31,8 @@
 typedef void (*PipelineFn)(const ImageU8& A, const ImageU8& B, const Params& params,
                            Result& result, Timing& timing);
 
-void run_v0(const ImageU8& A, const ImageU8& B, const Params& params, Result& result, Timing& timing);  // v0_sequential.cpp
-void run_v1(const ImageU8& A, const ImageU8& B, const Params& params, Result& result, Timing& timing);  // v1_basic.cu
+void runV0(const ImageU8& A, const ImageU8& B, const Params& params, Result& result, Timing& timing);  // v0_sequential.cpp
+void runV1(const ImageU8& A, const ImageU8& B, const Params& params, Result& result, Timing& timing);  // v1_basic.cu
 
 // One row per version: the number given to --version, a display name, and the function.
 struct VersionEntry {
@@ -42,7 +42,7 @@ struct VersionEntry {
 };
 
 static const VersionEntry VERSIONS[] = {
-    {0, "V0 sequential", run_v0},
-    {1, "V1 basic CUDA", run_v1},
+    {0, "V0 sequential", runV0},
+    {1, "V1 basic CUDA", runV1},
 };
 static const int NUM_VERSIONS = sizeof(VERSIONS) / sizeof(VERSIONS[0]);

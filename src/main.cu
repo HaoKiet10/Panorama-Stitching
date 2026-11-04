@@ -48,7 +48,7 @@ static void usage(const char* prog) {
 
 // Loads any format stb_image understands (JPG, PNG, BMP, ...) and forces 3 channels (RGB),
 // so grayscale or RGBA files also work.
-static bool load_image(const char* path, ImageU8& img) {
+static bool loadImage(const char* path, ImageU8& img) {
     int w, h, c;
     uint8_t* pixels = stbi_load(path, &w, &h, &c, 3);
     if (!pixels) return false;
@@ -61,7 +61,7 @@ static bool load_image(const char* path, ImageU8& img) {
 }
 
 // Saves as JPEG (quality 95) if the name ends in .jpg / .jpeg, otherwise as PNG.
-static bool save_image(const char* path, const ImageU8& img) {
+static bool saveImage(const char* path, const ImageU8& img) {
     if (img.width <= 0 || img.height <= 0) return false;
     std::string p(path);
     std::string ext = p.size() >= 4 ? p.substr(p.size() - 4) : "";
@@ -72,7 +72,7 @@ static bool save_image(const char* path, const ImageU8& img) {
 }
 
 // Reads a homography as 9 numbers (row by row, any whitespace).
-static bool load_h(const char* path, double H[9]) {
+static bool loadH(const char* path, double H[9]) {
     FILE* f = fopen(path, "r");
     if (!f) return false;
     bool ok = true;
@@ -81,8 +81,8 @@ static bool load_h(const char* path, double H[9]) {
     return ok;
 }
 
-// Writes a homography in the same format load_h reads (3 rows of 3 numbers).
-static bool save_h(const char* path, const double H[9]) {
+// Writes a homography in the same format loadH reads (3 rows of 3 numbers).
+static bool saveH(const char* path, const double H[9]) {
     FILE* f = fopen(path, "w");
     if (!f) return false;
     for (int r = 0; r < 3; r++) fprintf(f, "%.10g %.10g %.10g\n", H[r * 3], H[r * 3 + 1], H[r * 3 + 2]);
@@ -127,12 +127,12 @@ int main(int argc, char** argv) {
 
     // ---- 2. load the images (not timed)
     ImageU8 A, B;
-    if (!load_image(left_path, A)) { fprintf(stderr, "Cannot read %s\n", left_path); return EXIT_FAILURE; }
-    if (!load_image(right_path, B)) { fprintf(stderr, "Cannot read %s\n", right_path); return EXIT_FAILURE; }
+    if (!loadImage(left_path, A)) { fprintf(stderr, "Cannot read %s\n", left_path); return EXIT_FAILURE; }
+    if (!loadImage(right_path, B)) { fprintf(stderr, "Cannot read %s\n", right_path); return EXIT_FAILURE; }
 
     // ---- 3. header
     printf("%s | A %dx%d | B %dx%d | runs %d\n", entry->name, A.width, A.height, B.width, B.height, runs);
-    print_gpu_name();
+    printGpuName();
 
     // ---- 4. warm-up run (its timing is thrown away)
     Result result;
@@ -176,22 +176,22 @@ int main(int argc, char** argv) {
     double gt_err = -1, ref_err = -1;
     double G[9];
     if (gt_path) {
-        if (!load_h(gt_path, G)) { fprintf(stderr, "Cannot read %s\n", gt_path); return EXIT_FAILURE; }
-        gt_err = corner_error(result.H, G, B.width, B.height);
+        if (!loadH(gt_path, G)) { fprintf(stderr, "Cannot read %s\n", gt_path); return EXIT_FAILURE; }
+        gt_err = cornerError(result.H, G, B.width, B.height);
         printf("corner error vs ground truth: %.3f px\n", gt_err);
     }
     if (ref_path) {
-        if (!load_h(ref_path, G)) { fprintf(stderr, "Cannot read %s\n", ref_path); return EXIT_FAILURE; }
-        ref_err = corner_error(result.H, G, B.width, B.height);
+        if (!loadH(ref_path, G)) { fprintf(stderr, "Cannot read %s\n", ref_path); return EXIT_FAILURE; }
+        ref_err = cornerError(result.H, G, B.width, B.height);
         printf("corner error vs reference H: %.3f px\n", ref_err);
     }
 
     // ---- 7. save outputs (not timed)
-    if (save_h_path && !save_h(save_h_path, result.H)) {
+    if (save_h_path && !saveH(save_h_path, result.H)) {
         fprintf(stderr, "Cannot write %s\n", save_h_path);
         return EXIT_FAILURE;
     }
-    if (!save_image(out_path, result.panorama)) {
+    if (!saveImage(out_path, result.panorama)) {
         fprintf(stderr, "Cannot write %s (panorama is %dx%d)\n", out_path, result.panorama.width,
                 result.panorama.height);
         return EXIT_FAILURE;

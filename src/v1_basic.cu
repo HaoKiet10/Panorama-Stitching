@@ -8,14 +8,14 @@
 //                            top-K by sorting candidates on the device
 //   3. ORB                   one thread per keypoint (orientation + 256 tests)
 //   4. matching              one thread per keypoint of A scanning all of B (and B -> A for cross-check)
-//   5. RANSAC                one thread per hypothesis (samples from make_ransac_samples),
+//   5. RANSAC                one thread per hypothesis (samples from makeRansacSamples),
 //                            inlier count per thread, then argmax; refit on the host or a single block
 //   6. warp + blend          one thread per output pixel
 // Time each stage with GpuTimer (CUDA events) and the copies with h2d_ms / d2h_ms.
 #include "versions.h"
 #include "cuda_utils.cuh"
 
-void run_v1(const ImageU8& A, const ImageU8& B, const Params& params, Result& result, Timing& timing) {
+void runV1(const ImageU8& A, const ImageU8& B, const Params& params, Result& result, Timing& timing) {
     (void)A; (void)B; (void)params; (void)result; (void)timing;
     fprintf(stderr, "V1 is not implemented yet.\n");
     exit(EXIT_FAILURE);

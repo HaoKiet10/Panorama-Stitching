@@ -65,7 +65,7 @@ struct GpuTimer {
 // Prints the GPU name, compute capability and SM count.
 // The spec asks for the GPU name next to every result, so main.cu calls this for every
 // version, including V0 (so the CPU and GPU numbers are tied to the same Colab session).
-inline void print_gpu_name() {
+inline void printGpuName() {
     int count = 0;
     if (cudaGetDeviceCount(&count) != cudaSuccess || count == 0) {
         printf("GPU: none detected\n");
