@@ -104,8 +104,8 @@ struct Match {
 // main.cu lets you override a few of them from the command line for experiments.
 struct Params {
     // ---- 1. preprocessing
-    float blur_sigma = 1.2f;     // Gaussian standard deviation, in pixels
     int blur_radius = 2;         // kernel covers [-radius, +radius] -> 5 taps
+    float blur_sigma = blur_radius / 3.0f;     // Gaussian standard deviation, in pixels
 
     // ---- 2. detection
     float harris_k = 0.04f;      // R = det(M) - k * trace(M)^2
@@ -114,6 +114,8 @@ struct Params {
     int max_keypoints = 2000;    // top-K: keep the K strongest corners
     int border = 16;             // ignore corners closer than this to the edge,
                                  // so the 31x31 ORB patch always fits in the image
+    float sobelX[9] = {-1, 0, 1, -2, 0, 2, -1, 0, 1};       
+    float sobelY[9] = {-1, -2, -1, 0, 0, 0, -1, -2, -1};
 
     // ---- 3. description
     int orb_radius = 15;         // patch radius -> 31x31 patch
