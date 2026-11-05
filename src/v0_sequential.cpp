@@ -85,7 +85,8 @@ static bool solve8(double M[8][8], double v[8], double h[8]) {
 }
 
 // =====================================================================================
-// Stage 1 - preprocessing                                          owner: <Member A>
+// Stage 1 - preprocessing                                    
+// Owner: Quách Châu Hạo Kiệt
 // =====================================================================================
 
 // TODO: convert an RGB image to grayscale.
@@ -93,6 +94,17 @@ static bool solve8(double M[8][8], double v[8], double h[8]) {
 //   out  float image of the same size
 //   For every pixel: gray = 0.299 R + 0.587 G + 0.114 B   (values stay in 0..255)
 static void toGray(const ImageU8& in, ImageF& out) {
+    out.height = in.height;
+    out.width = in.width;
+    out.data.resize((size_t)out.width * out.height);
+    
+    for (int y = 0; y < out.height; y++) {
+        for (int x = 0; x < out.width; x++) {
+            size_t index = (size_t)y * out.width + x;
+            size_t rgb_index = index * 3;
+            out.data[index] = in.data[rgb_index] * .299f + in.data[rgb_index + 1] * .587f + in.data[rgb_index + 2] * .114f;
+        }
+    }
 }
 
 // TODO: build a normalized 1-D Gaussian kernel.
@@ -100,7 +112,18 @@ static void toGray(const ImageU8& in, ImageF& out) {
 //   exp(-i^2 / (2 sigma^2)). Divide by the sum so the weights add up to 1
 //   (otherwise the blur changes the image brightness).
 static std::vector<float> gaussianKernel(float sigma, int radius) {
-    return {};
+    std::vector<float> k(2 * radius + 1);
+    float sum = 0;
+
+    for (int i = -radius; i <= radius; i++) {
+        k[i + radius] = expf(-(i * i) / (2 *  sigma * sigma));
+        sum += k[i + radius];
+    }
+
+    for (int i = 0; i < k.size(); i++) {
+        k[i] /= sum;
+    }
+    return k;
 }
 
 // TODO: separable Gaussian blur.
@@ -110,6 +133,30 @@ static std::vector<float> gaussianKernel(float sigma, int radius) {
 //   with i = -radius..radius and clamp-to-edge at the borders (clampInt).
 //   Two 1-D passes give the same result as one 2-D k x k blur with 2k instead of k^2 work.
 static void gaussianBlur(const ImageF& in, ImageF& out, const std::vector<float>& k, int radius) {
+    int height = in.height, width = in.width;
+    std::vector<float> temp((size_t)height * width);
+    
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            float sum = 0;
+            for (int i = -radius; i <= radius; i++)
+                sum += k[i + radius] * in.data[y * width + clampInt(x + i, 0, width - 1)];
+            temp[y * width + x] = sum;
+        }
+    }
+
+    out.height = height;
+    out.width = width;
+    out.data.resize((size_t) height * width);
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            float sum = 0;
+            for (int i = -radius; i <= radius; i++)
+                sum += k[i + radius] * temp[clampInt(y + i, 0, height - 1) * width + x];
+            out.data[y * width + x] = sum;
+        }
+    }
 }
 
 // =====================================================================================
@@ -196,7 +243,8 @@ static void matchDescriptors(const std::vector<Descriptor>& dA, const std::vecto
 }
 
 // =====================================================================================
-// Stage 5 - homography (RANSAC + DLT)                              owner: <Member A>
+// Stage 5 - homography (RANSAC + DLT)                              
+// owner: Quách Châu Hạo Kiệt
 // =====================================================================================
 
 // TODO: Hartley normalization of n points (pts = x0, y0, x1, y1, ...).
