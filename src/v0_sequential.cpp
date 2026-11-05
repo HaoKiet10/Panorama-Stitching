@@ -1,6 +1,6 @@
 // =====================================================================================
 // v0_sequential.cpp - V0: single-threaded reference implementation of the whole pipeline.
-// Authors: <Member A> (stages 1, 5), <Member B> (stages 2, 6), <Member C> (stages 3, 4)
+// Authors: <Member A> (stages 1, 5), Tôn Thất Minh Đăng (stages 2, 6), <Member C> (stages 3, 4)
 // =====================================================================================
 //
 // V0 is the reference for correctness and the baseline for every speedup, so:
@@ -160,7 +160,7 @@ static void gaussianBlur(const ImageF& in, ImageF& out, const std::vector<float>
 }
 
 // =====================================================================================
-// Stage 2 - keypoint detection                                     owner: <Member B>
+// Stage 2 - keypoint detection                                     owner: Tôn Thất Minh Đăng
 // =====================================================================================
 
 // TODO: Harris corner response for every pixel.
@@ -170,10 +170,74 @@ static void gaussianBlur(const ImageF& in, ImageF& out, const std::vector<float>
 //        gy = [I(x-1,y+1) + 2 I(x,y+1) + I(x+1,y+1)] - [I(x-1,y-1) + 2 I(x,y-1) + I(x+1,y-1)]
 //      and store the products gx*gx, gy*gy, gx*gy in three arrays.
 //   2. For every pixel, sum each product over the (2 r + 1)^2 window, r = p.harris_radius
-//      (clamp-to-edge):  Sxx, Syy, Sxy.
+//      (clamp-to-edge):  Sxx, Syy, Sxy. Window function used: Gaussian with sigma =
 //   3. R = (Sxx * Syy - Sxy^2) - p.harris_k * (Sxx + Syy)^2
 //      R is large and positive at corners, negative on edges, near 0 in flat areas.
 static void harrisResponse(const ImageF& img, const Params& p, std::vector<float>& R) {
+    int w = img.width, h = img.height;
+    size_t n = size_t(w * h);
+    R.resize(n);
+
+    // gradient maps
+    ImageF Ixx{w, h, std::vector<float>(n)};
+    ImageF Iyy{w, h, std::vector<float>(n)};
+    ImageF Ixy{w, h, std::vector<float>(n)};
+
+    //  1. Sobel gradients and second degree gradient calculation
+    for(int r = 0; r < h; r++) {
+        for(int c = 0; c < w; c++) {
+            // sobel gradients
+            float gx = 0, gy = 0;
+            for(int i = 0; i < 3; i++) {
+                for (int j = 0; j < 3; j++) {
+                    int curRow = clampInt(r + i - 1, 0, h - 1);
+                    int curCol = clampInt(c + j - 1, 0, w - 1);
+
+                    int filterIdx = i * 3 + j;
+                    int imgIdx = curRow * w + curCol;
+
+                    gx += img.data[imgIdx] * p.sobelX[filterIdx];
+                    gy += img.data[imgIdx] * p.sobelY[filterIdx];
+                }
+            }
+
+            // second degree gradients
+            int idx = r * w + c;
+            Ixx.data[idx] = gx * gx;
+            Iyy.data[idx] = gy * gy;
+            Ixy.data[idx] = gx * gy;
+        }
+    }
+
+    // calculate second moment matrix (Harris matrix) (Sxx, Sxy, Syy)
+    // using 2 1D gaussian convolutions.
+    float harris_sigma = p.harris_radius / 3.0f;
+    std::vector<float> kernel = gaussianKernel(harris_sigma, p.harris_radius);
+ 
+    ImageF Sxx, Syy, Sxy;
+    gaussianBlur(Ixx, Sxx, kernel, p.harris_radius);
+    gaussianBlur(Iyy, Syy, kernel, p.harris_radius);
+    gaussianBlur(Ixy, Sxy, kernel, p.harris_radius);
+    
+    // From the second moment matrix find the determinant and trace values for each pixel
+    // The two eigenvalues from this matrix (2*2) decide the direction of gradient change.
+    // As gradient change the most when moving perpendicular to an edge => larger gradients
+    // indicate a steeper edge in one direction.
+    // As a corner requires steep changes in both directions at once => if both eigenvalues
+    // are large, that pixel is a corner.
+    for(int r = 0; r < h; r++) {
+        for(int c = 0; c < w; c++) {
+            int idx = r * w + c;
+            float curSxx = Sxx.data[idx];
+            float curSyy = Syy.data[idx];
+            float curSxy = Sxy.data[idx];
+            
+            float det = curSxx * curSyy - curSxy * curSxy;
+            float trace = curSxx + curSyy;
+
+            R[idx] = det - p.harris_k * trace * trace;
+        }
+    }
 }
 
 // TODO: non-max suppression + top-K.
