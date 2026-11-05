@@ -294,3 +294,14 @@ inline double cornerError(const double H[9], const double G[9], int width, int h
     }
     return sum / 4;
 }
+
+// Custom comparison function for sorting keypoints
+inline bool customKpComp(const Keypoint& a, const Keypoint& b) {
+    if(a.score != b.score) {
+        return a.score > b.score;
+    }
+    if(a.y != b.y) {
+        return a.y < b.y;
+    }
+    return a.x < b.x;
+}

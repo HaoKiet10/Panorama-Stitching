@@ -251,6 +251,52 @@ static void harrisResponse(const ImageF& img, const Params& p, std::vector<float
 //   4. Keep only the first p.max_keypoints.
 //   The tie rules matter: the GPU version must pick exactly the same keypoints.
 static void selectKeypoints(const std::vector<float>& R, int w, int h, const Params& p, std::vector<Keypoint>& kps) {
+    // run from border to ensure full 31 * 31 ORB zones later in stage 3.
+    for(int r = p.border; r < h - p.border; r++) {
+        for(int c = p.border; c < w - p.border; c++) {
+            int idx = r * w + c;
+            float score = R[idx];
+            if(score <= 0.0f) continue; // only consider positive responses.
+            // does not need thresholding because at the end we will sort by magnitude and
+            // choose top-K anyway.
+            
+            // non-maximum suppression in a 3x3 window (nms_radius = 1)
+            int nmsR = p.nms_radius;
+            int nmsZoneSize = p.nms_radius * 2 + 1;
+            bool isMaximum = true;
+            for(int i = 0; i < nmsZoneSize; i++) {
+                for(int j = 0; j < nmsZoneSize; j++) {
+                    if(i == nmsR && j == nmsR) continue;
+                    
+                    int curRow = clampInt(r + i - nmsR, 0, h - 1);
+                    int curCol = clampInt(c + j - nmsR, 0, w - 1);
+                    int zoneIdx = curRow * w + curCol;
+
+                    if(score < R[zoneIdx]) {
+                        isMaximum = false;
+                        break;
+                    }
+                    
+                    if(score == R[zoneIdx] && zoneIdx < idx) {
+                        isMaximum = false;
+                        break;
+                    }
+                }
+                if(isMaximum == false) break;
+            }
+
+            // push candidate into keypoint array.
+            if (isMaximum) kps.push_back({c, r, score, 0.0f});
+        }
+    }
+
+    // Sort candidates based on score
+    std::sort(kps.begin(), kps.end(), customKpComp);
+
+    // cutoff at p.max_keypoints
+    if((int)kps.size() > p.max_keypoints) {
+        kps.erase(kps.begin() + p.max_keypoints, kps.end());
+    }
 }
 
 // =====================================================================================
