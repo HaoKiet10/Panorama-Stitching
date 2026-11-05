@@ -115,7 +115,7 @@ struct Params {
     int border = 16;             // ignore corners closer than this to the edge,
                                  // so the 31x31 ORB patch always fits in the image
     float sobelX[9] = {-1, 0, 1, -2, 0, 2, -1, 0, 1};       
-    float sobelY[9] = {-1, -2, -1, 0, 0, 0, -1, -2, -1};
+    float sobelY[9] = {-1, -2, -1, 0, 0, 0, 1, 2, 1};
 
     // ---- 3. description
     int orb_radius = 15;         // patch radius -> 31x31 patch
