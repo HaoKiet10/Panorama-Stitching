@@ -300,7 +300,8 @@ static void selectKeypoints(const std::vector<float>& R, int w, int h, const Par
 }
 
 // =====================================================================================
-// Stage 3 - description (ORB)                                      owner: <Member C>
+// Stage 3 - description (ORB)                                  
+// Owner: Phan Thanh Bình
 // =====================================================================================
 
 // TODO: ORB orientation of the keypoint at (cx, cy).
@@ -311,7 +312,22 @@ static void selectKeypoints(const std::vector<float>& R, int w, int h, const Par
 //                                 "centre of brightness", in radians.
 //   No clamping needed: p.border keeps the disc inside the image. Accumulate in float.
 static float orientation(const ImageF& img, int cx, int cy, int radius) {
-    return 0.0f;
+    const int w = img.width;
+    const int r2 = radius * radius;
+    float m10 = 0.0f, m01 = 0.0f;
+
+    // Intensity moments over a disc (not a square) of the given radius.
+    // p.border guarantees the disc stays inside the image, so no clamping is needed.
+    for (int dy = -radius; dy <= radius; dy++) {
+        for (int dx = -radius; dx <= radius; dx++) {
+            if (dx * dx + dy * dy > r2) continue;
+            const float v = img.data[(size_t)(cy + dy) * w + (cx + dx)];
+            m10 += (float)dx * v;
+            m01 += (float)dy * v;
+        }
+    }
+    // Direction from the keypoint to the patch's "centre of brightness".
+    return atan2f(m01, m10);
 }
 
 // TODO: rotated BRIEF descriptor for every keypoint.
@@ -327,16 +343,52 @@ static float orientation(const ImageF& img, int cx, int cy, int radius) {
 //          if v1 < v2, set bit i:  desc[k].w[i >> 5] |= 1u << (i & 31)
 //   Use roundToInt (common.h) so the GPU rounds exactly the same way.
 static void describe(const ImageF& img, std::vector<Keypoint>& kps, const std::vector<OrbPair>& pattern, int radius, std::vector<Descriptor>& desc) {
+    const int w = img.width;
+    const int numTests = (int)pattern.size();  // 256 binary tests -> 8 x 32-bit words
+
+    desc.resize(kps.size());
+
+    for (size_t k = 0; k < kps.size(); k++) {
+        const int cx = (int)kps[k].x;
+        const int cy = (int)kps[k].y;
+
+        // 1. Orientation of the patch; store it back in the keypoint.
+        const float angle = orientation(img, cx, cy, radius);
+        kps[k].angle = angle;
+        const float c = cosf(angle);
+        const float s = sinf(angle);
+
+        // All bits start at 0.
+        for (int j = 0; j < 8; j++) desc[k].w[j] = 0u;
+
+        // 2. Rotated BRIEF: compare two rotated offsets around the keypoint.
+        for (int i = 0; i < numTests; i++) {
+            const OrbPair& t = pattern[i];
+
+            const int rx1 = roundToInt(c * (float)t.x1 - s * (float)t.y1);
+            const int ry1 = roundToInt(s * (float)t.x1 + c * (float)t.y1);
+            const int rx2 = roundToInt(c * (float)t.x2 - s * (float)t.y2);
+            const int ry2 = roundToInt(s * (float)t.x2 + c * (float)t.y2);
+
+            const float v1 = img.data[(size_t)(cy + ry1) * w + (cx + rx1)];
+            const float v2 = img.data[(size_t)(cy + ry2) * w + (cx + rx2)];
+
+            if (v1 < v2) desc[k].w[i >> 5] |= 1u << (i & 31);
+        }
+    }
 }
 
 // =====================================================================================
-// Stage 4 - matching                                               owner: <Member C>
+// Stage 4 - matching                                               
+// Owner: Phan Thanh Bình
 // =====================================================================================
 
 // TODO: Hamming distance = number of differing bits = sum over the 8 words of
 //   popcount32(a.w[k] ^ b.w[k]).
 static inline int hamming(const Descriptor& a, const Descriptor& b) {
-    return 0;
+    int d = 0;
+    for (int k = 0; k < 8; k++) d += popcount32(a.w[k] ^ b.w[k]);
+    return d;
 }
 
 // TODO: brute-force matching with Lowe's ratio test and cross-check.
@@ -350,6 +402,48 @@ static inline int hamming(const Descriptor& a, const Descriptor& b) {
 //        - cross-check:  best_of_b[best_b] == a    (skip if p.cross_check is false)
 //      and push {a, best_b, best} in increasing order of a.
 static void matchDescriptors(const std::vector<Descriptor>& dA, const std::vector<Descriptor>& dB, const Params& p, std::vector<Match>& matches) {
+    matches.clear();
+    const int nA = (int)dA.size();
+    const int nB = (int)dB.size();
+    if (nA == 0 || nB == 0) return;
+
+    // 1. Cross-check table: for every b, the closest a (ties -> smallest a, hence strict '<').
+    std::vector<int> best_of_b;
+    if (p.cross_check) {
+        best_of_b.assign(nB, -1);
+        for (int b = 0; b < nB; b++) {
+            int bestDist = INT_MAX;
+            for (int a = 0; a < nA; a++) {
+                const int d = hamming(dA[a], dB[b]);
+                if (d < bestDist) {
+                    bestDist = d;
+                    best_of_b[b] = a;
+                }
+            }
+        }
+    }
+
+    // 2. For every a: best and second-best distance over all of B.
+    for (int a = 0; a < nA; a++) {
+        int best = INT_MAX, second = INT_MAX, bestB = -1;
+        for (int b = 0; b < nB; b++) {
+            const int d = hamming(dA[a], dB[b]);
+            if (d < best) {          // strict '<': ties keep the smallest b
+                second = best;
+                best = d;
+                bestB = b;
+            } else if (d < second) { // an equal distance also becomes the second best
+                second = d;
+            }
+        }
+
+        // 3. Ratio test (in floats); accepted automatically if B has a single point.
+        const bool ratioOk = (nB == 1) || ((float)best < p.ratio * (float)second);
+        // Cross-check: a must also be the best partner of bestB.
+        const bool crossOk = !p.cross_check || (best_of_b[bestB] == a);
+
+        if (ratioOk && crossOk) matches.push_back(Match{a, bestB, best});  // increasing a
+    }
 }
 
 // =====================================================================================
