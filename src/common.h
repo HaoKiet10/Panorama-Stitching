@@ -242,6 +242,18 @@ HOST_DEVICE inline int clampInt(int v, int lo, int hi) { return v < lo ? lo : (v
 // GPU: lroundf, rintf and __float2int_rn round .5 differently and would make V0 and V1 differ.
 HOST_DEVICE inline int roundToInt(float v) { return (int)floorf(v + 0.5f); }
 
+// Helper: clamp v into [lo, hi] for floats. Usable on both host and device.
+HOST_DEVICE inline float clampFloat(float v, float lo, float hi) {
+    return fminf(fmaxf(v, lo), hi);
+}
+
+// Helper: find distance from a pixel to edge, used in stage 6 to get weights for both images in blending.
+HOST_DEVICE inline float edgeDistance(float x, float y, float w, float h) {
+    float dx = fminf(x + 1.0f, w - x);
+    float dy = fminf(y + 1.0f, h - y);
+    return fminf(dx, dy);
+}
+
 // =====================================================================================
 // Homography helpers (host side)
 // =====================================================================================

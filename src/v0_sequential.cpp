@@ -160,7 +160,8 @@ static void gaussianBlur(const ImageF& in, ImageF& out, const std::vector<float>
 }
 
 // =====================================================================================
-// Stage 2 - keypoint detection                                     owner: Tôn Thất Minh Đăng
+// Stage 2 - keypoint detection                                     
+// owner: Tôn Thất Minh Đăng
 // =====================================================================================
 
 // TODO: Harris corner response for every pixel.
@@ -220,7 +221,7 @@ static void harrisResponse(const ImageF& img, const Params& p, std::vector<float
     gaussianBlur(Ixy, Sxy, kernel, p.harris_radius);
     
     // From the second moment matrix find the determinant and trace values for each pixel
-    // The two eigenvalues from this matrix (2*2) decide the direction of gradient change.
+    // The two eigenvalues from this matrix (2*2) decide the direction of fastest and slowest intensity change
     // As gradient change the most when moving perpendicular to an edge => larger gradients
     // indicate a steeper edge in one direction.
     // As a corner requires steep changes in both directions at once => if both eigenvalues
@@ -267,7 +268,7 @@ static void selectKeypoints(const std::vector<float>& R, int w, int h, const Par
             for(int i = 0; i < nmsZoneSize; i++) {
                 for(int j = 0; j < nmsZoneSize; j++) {
                     if(i == nmsR && j == nmsR) continue;
-                    
+
                     int curRow = clampInt(r + i - nmsR, 0, h - 1);
                     int curCol = clampInt(c + j - nmsR, 0, w - 1);
                     int zoneIdx = curRow * w + curCol;
@@ -646,7 +647,8 @@ static int estimateHomography(const std::vector<Keypoint>& kA, const std::vector
 }
 
 // =====================================================================================
-// Stage 6 - warping + blending                                     owner: <Member B>
+// Stage 6 - warping + blending                                     
+// owner: Tôn Thất Minh Đăng
 // =====================================================================================
 
 // TODO: inverse warping + bilinear sampling + feathering.
@@ -666,6 +668,139 @@ static int estimateHomography(const std::vector<Keypoint>& kA, const std::vector
 //          255; leave black where neither image covers the pixel.
 //      The weights fade each image out towards its own border, which hides the seam.
 static void warpAndBlend(const ImageU8& A, const ImageU8& B, const double H[9], ImageU8& out) {
+    int wA = A.width, hA = A.height, wB = B.width, hB = B.height;
+    // ---------------------------------------
+    // 1. Get canvas size to stitch A and B on
+    // ---------------------------------------
+    double coordsBx[4];
+    double coordsBy[4];
+
+    applyH(H, 0, 0, coordsBx[0], coordsBy[0]);
+    applyH(H, B.width, 0, coordsBx[1], coordsBy[1]);
+    applyH(H, 0, B.height, coordsBx[2], coordsBy[2]);
+    applyH(H, B.width, B.height, coordsBx[3], coordsBy[3]);
+    
+    double minX = 0, minY = 0, maxX = A.width, maxY = A.height;
+    for(int i = 0; i < 4; i++) {
+        minX = std::min(minX, coordsBx[i]);
+        minY = std::min(minY, coordsBy[i]);
+        maxX = std::max(maxX, coordsBx[i]);
+        maxY = std::max(maxY, coordsBy[i]);
+    }
+    
+    // clamp the results
+    minX = clampFloat(minX, -2.0 * wA, 3.0 * wA);
+    maxX = clampFloat(maxX, -2.0 * wA, 3.0 * wA);
+    minY = clampFloat(minY, -2.0 * hA, 3.0 * hA);
+    maxY = clampFloat(maxY, -2.0 * hA, 3.0 * hA);
+    
+    // Compute integer canvas dimensions and offsets
+    int ox = (int)floor(minX);
+    int oy = (int)floor(minY);
+    int canvasW  = (int)ceil(maxX) - ox;
+    int canvasH = (int)ceil(maxY) - oy;
+
+    // Initialize the output image canvas filled with 0 (black)
+    out.width = canvasW;
+    out.height = canvasH;
+    out.channels = 3;
+    out.data.assign((size_t)canvasW * canvasH * 3, 0);
+
+    // -------------------------------------------
+    // 2. Inverting H
+    // -------------------------------------------
+    double Hi[9];
+    if (!invertH(H, Hi)) return;
+
+    // -------------------------------------------
+    // 3. Calculate canvas pixel values based on 
+    // position in A's coordinate system.
+    // -------------------------------------------
+    for(int r = 0; r < canvasH; r++) {
+        for(int c = 0; c < canvasW; c++) {
+            // calculate corresponding image A coordinates
+            int py = r + oy;
+            int px = c + ox;
+
+            // find position back in B
+            double qx, qy;
+            applyH(Hi, (double)px, (double)py, qx, qy);
+
+            // blending the two images' color with each other
+            // image A weights
+            int colorA[3] = {0, 0, 0};
+            float weightA = 0.0f;
+            if(px >= 0 && px < wA && py >= 0 && py < hA) {
+                // get color value in A
+                int idxA = (py * wA + px) * 3;
+                colorA[0] = A.data[idxA];
+                colorA[1] = A.data[idxA + 1];
+                colorA[2] = A.data[idxA + 2];
+                
+                // get weight
+                weightA = edgeDistance((float)px, (float)py, (float)wA, (float)hA);
+            }
+            // image B weights
+            float weightB = 0.0f;
+            float colorB[3];
+            if(qx >= 0.0f && qx < (float)wB && qy >= 0.0f && qy < (float)hB) {
+                // bilinear interpolation to get color value in B
+                // get 4 pixels coords around q.
+                int x0 = (int)floorf(qx), y0 = (int)floorf(qy);
+                int x1 = x0 + 1, y1 = y0 + 1;
+
+                float dx = qx - x0, dy = qy - y0;
+                // clamp to image B bounds
+                x0 = clampInt(x0, 0, wB - 1);
+                x1 = clampInt(x1, 0, wB - 1);
+                y0 = clampInt(y0, 0, hB - 1);
+                y1 = clampInt(y1, 0, hB - 1);
+
+                // sample value of 4 neighbor pixels to get final 
+                // color value of B.
+                for(int ch = 0; ch < 3; ch++) {
+                    float p00 = B.data[(y0 * wB + x0) * 3 + ch];
+                    float p01 = B.data[(y0 * wB + x1) * 3 + ch];
+                    float p10 = B.data[(y1 * wB + x0) * 3 + ch];
+                    float p11 = B.data[(y1 * wB + x1) * 3 + ch];
+
+                    colorB[ch] = (1.0f - dy) * ((1.0f - dx) * p00 + dx * p01) + dy * ((1.0f - dx) * p10 + dx * p11);
+                }
+
+                // get B weight
+                weightB = edgeDistance(qx, qy, (float)wB, (float)hB);
+            }
+
+            // blending
+            int outIdx = (r * canvasW + c) * 3;
+            if (weightA > 0.0f && weightB > 0.0f) {
+                // Overlapping region: weighted avg (feathering)
+                float sumW = weightA + weightB;
+                for(int ch = 0; ch < 3; ch++) {
+                    float blended = (weightA * colorA[ch] + weightB * colorB[ch]) / sumW;
+                    out.data[outIdx + ch] = (uint8_t)clampInt(roundToInt(blended),0, 255);
+                }
+            }
+            else if(weightA > 0.0f) {
+                // Only Image A cover this pixel
+                for(int ch = 0; ch < 3; ch++) {
+                    out.data[outIdx + ch] = colorA[ch];
+                }
+            }
+            else if(weightB > 0.0f) {
+                // Only Image B cover this pixel
+                for(int ch = 0; ch < 3; ch++) {
+                    out.data[outIdx + ch] = (uint8_t)clampInt(roundToInt(colorB[ch]), 0, 255);
+                }
+            }
+            else {
+                // Neither image cover this pixel, leave black
+                out.data[outIdx + 0] = 0;
+                out.data[outIdx + 1] = 0;
+                out.data[outIdx + 2] = 0;
+            }
+        }
+    }
 }
 
 // =====================================================================================
