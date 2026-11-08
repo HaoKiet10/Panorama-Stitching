@@ -459,6 +459,33 @@ static void matchDescriptors(const std::vector<Descriptor>& dA, const std::vecto
 //                                           | 0  0    1   |
 //   Without it the DLT equations mix numbers ~1 and ~10^6 and lose precision.
 static void normalizePoints(const double* pts, int n, double T[9]) {
+    double cx = 0, cy = 0;
+
+    for (int i = 0; i < n; i++) {
+        cx += pts[2 * i] / n;
+        cy += pts[2 * i + 1] / n;
+    }
+
+    double meanDist = 0;
+    for (int i = 0; i < n; i++) {
+        double dx = pts[2 * i] - cx;
+        double dy = pts[2 * i + 1] - cy;
+        meanDist += sqrt(dx * dx + dy * dy) / n;
+    }
+
+    // check if meanDist is 0 
+    // if yes shrink factor = 1 -> solve8 reports failure
+    double shrinkFactor = meanDist > 1e-12 ? sqrt(2) / meanDist : 1;
+
+    T[0] = shrinkFactor;
+    T[1] = 0;
+    T[2] = -shrinkFactor * cx; 
+    T[3] = 0;
+    T[4] = shrinkFactor;
+    T[5] = -shrinkFactor * cy;
+    T[6] = 0;
+    T[7] = 0;
+    T[8] = 1;
 }
 
 // TODO: DLT - fit H (src -> dst) to n >= 4 point pairs, with H[8] fixed to 1.
@@ -474,7 +501,45 @@ static void normalizePoints(const double* pts, int n, double T[9]) {
 //   4. Hn = [h0..h7, 1];  undo the normalization:  H = Td^-1 * Hn * Ts
 //      (invertH from common.h and mat3Mul above); then divide all of H by H[8].
 static bool fitHomography(const double* src, const double* dst, int n, double H[9]) {
-    return false;
+    double Ts[9] = {0}, Td[9] = {0};
+    normalizePoints(src, n, Ts);
+    normalizePoints(dst, n, Td);
+
+    double M[8][8] = {0};
+    double rhs[8] = {0};
+    for (int i = 0; i < n; i++) {
+        double x = src[2 * i] * Ts[0] + Ts[2];
+        double y = src[2 * i + 1] * Ts[4] + Ts[5];
+        double u = dst[2 * i] * Td[0] + Td[2];
+        double v = dst[2 * i + 1] * Td[4] + Td[5];
+
+        double r1[] = {x, y, 1, 0, 0, 0, -u * x, -u * y};
+        double r2[] = {0, 0, 0, x, y, 1, -v * x, -v * y};
+
+        for (int a = 0; a < 8; a++) {
+            for (int b = 0; b < 8; b++) {
+                M[b][a] += r1[a] * r1[b]; 
+                M[b][a] += r2[a] * r2[b];
+            }
+            rhs[a] += r1[a] * u; 
+            rhs[a] += r2[a] * v;
+        }
+    }
+    double h[8] = {0};
+    if(!solve8(M, rhs, h)) return false;
+
+    double hn[] = {h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1};
+    double TdInv[9] = {0};
+    if (!invertH(Td, TdInv)) return false;
+
+    double temp[9] = {0};
+    mat3Mul(TdInv, hn, temp);
+    mat3Mul(temp, Ts, H);
+    
+    for(int i = 0;  i < 9; i++)
+        H[i] = H[i] / H[8];
+
+    return true;
 }
 
 // TODO: count the inliers of H.
@@ -483,7 +548,25 @@ static bool fitHomography(const double* src, const double* dst, int n, double H[
 //   (compare squared distances: dx^2 + dy^2 < thresh^2).
 //   If mask is not null, also set (*mask)[i] = 1 for inliers and 0 otherwise.
 static int countInliers(const double H[9], const std::vector<double>& src, const std::vector<double>& dst, float thresh, std::vector<char>* mask) {
-    return 0;
+    int inliers = 0;
+    float threshSq = thresh * thresh;
+    int size = src.size() / 2;
+
+    for (int i = 0; i < size; i++) {
+        double ox = 0, oy = 0;
+        applyH(H, src[2 * i], src[2 * i + 1], ox, oy);
+
+        double dx = dst[2 * i] - ox;
+        double dy = dst[2 * i + 1] - oy;
+        bool inlier = (dx * dx + dy * dy) < threshSq;
+
+        if (inlier)
+            inliers++;
+        
+        if (mask)
+            (*mask)[i] = inlier;
+    }
+    return inliers;
 }
 
 // TODO: RANSAC. Returns the number of inliers of the final H (0 = no homography found).
@@ -498,7 +581,68 @@ static int countInliers(const double H[9], const std::vector<double>& src, const
 //   5. Refit: fitHomography on ALL inliers of the best H (least squares). Keep the refit if
 //      it succeeds and has at least as many inliers. Return the final inlier count.
 static int estimateHomography(const std::vector<Keypoint>& kA, const std::vector<Keypoint>& kB, const std::vector<Match>& matches, const Params& p, double H[9]) {
-    return 0;
+    std::vector<double> src, dst;
+    src.resize(matches.size() * 2);
+    dst.resize(matches.size() * 2);
+
+    for (int i = 0; i < matches.size(); i++) {
+        dst[2 * i] = kA[matches[i].a].x;
+        dst[2 * i + 1] = kA[matches[i].a].y;
+        src[2 * i] = kB[matches[i].b].x;
+        src[2 * i + 1] = kB[matches[i].b].y;
+    }
+
+    std::vector<int> samples = makeRansacSamples(matches.size(), p.ransac_iters, p.ransac_seed);
+
+    if (samples.size() <= 0) return 0;
+    double hBest[9] = {0};
+    int bestInliers = 0;
+
+    for (int i = 0; i < p.ransac_iters; i++) {
+        double src4[8], dst4[8];
+        double hc[9] = {0};
+        for (int j = 0; j < 4; j++) {
+            int index = samples[4 * i + j];
+            src4[2 * j] = kB[matches[index].b].x;
+            src4[2 * j + 1] = kB[matches[index].b].y;
+            dst4[2 * j] = kA[matches[index].a].x;
+            dst4[2 * j + 1] = kA[matches[index].a].y;
+        }
+        if (!fitHomography(src4, dst4, 4, hc)) continue;
+
+        int c = countInliers(hc, src, dst, p.ransac_thresh, nullptr);
+        if (c > bestInliers) {
+            bestInliers = c;
+            std::copy(hc, hc + 9, hBest);
+        }
+    }
+
+    if (bestInliers < 4) return 0;
+    
+    std::vector<char> mask(matches.size());
+    bestInliers = countInliers(hBest, src, dst, p.ransac_thresh, &mask);
+
+    std::vector<double> inSrc, inDst;
+    for (int i = 0; i < matches.size(); i++) {
+        if (!mask[i]) continue;
+        inSrc.push_back(src[2 * i]);
+        inSrc.push_back(src[2 * i + 1]);
+        inDst.push_back(dst[2 * i]);
+        inDst.push_back(dst[2 * i +  1]);
+    }
+
+    double hr[9] = {0};
+    if (!fitHomography(inSrc.data(), inDst.data(), bestInliers, hr)) {
+        std::copy(hBest, hBest + 9, H);
+        return bestInliers;
+    }
+    int allInliers = countInliers(hr, src, dst, p.ransac_thresh, nullptr);
+    if (allInliers >= bestInliers) {
+        std::copy(hr, hr + 9, H);
+        return allInliers;
+    }
+    std::copy(hBest, hBest + 9, H);
+    return bestInliers;
 }
 
 // =====================================================================================
