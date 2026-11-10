@@ -1,6 +1,6 @@
 """Crop each photo pair to 16:9 and resize it to the three benchmark sizes.
 
-Authors: <Member A>, <Member B>, <Member C>
+Authors: Quách Châu Hạo Kiệt, Tôn Thất Minh Đăng
 Drafted with an AI assistant (Claude) and reviewed by the team.
 
 Input layout (one folder per site, two photos named left.* and right.*):
@@ -36,6 +36,7 @@ def crop_16_9(img: Image.Image) -> Image.Image:
         cw, ch = h * 16 // 9, h
     else:                       # too tall: trim top and bottom
         cw, ch = w, w * 9 // 16
+    # symmetric centering, trim equally from top, bot, left, right.
     x0, y0 = (w - cw) // 2, (h - ch) // 2
     return img.crop((x0, y0, x0 + cw, y0 + ch))
 
@@ -59,7 +60,8 @@ def main() -> None:
             for size_name, size in SIZES.items():
                 dst = args.out / site.name / size_name / f"{name}.jpg"
                 dst.parent.mkdir(parents=True, exist_ok=True)
-                img.resize(size, Image.LANCZOS).save(dst, quality=95)
+                # Lanczos filtering to avoid aliasing (jagged edges, may corrupt Harris response)
+                img.resize(size, Image.Resampling.LANCZOS).save(dst, quality=95)
         print(f"{site.name}: done")
 
 
