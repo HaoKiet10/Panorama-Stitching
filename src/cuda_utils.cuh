@@ -1,6 +1,6 @@
 // =====================================================================================
 // cuda_utils.cuh - error checking and CUDA-event timing shared by the GPU versions.
-// Authors: <Member A>, <Member B>, <Member C>
+// Referenced from CSC14120 homework templates.
 // CHECK and GpuTimer adapted from the CSC14120 homework templates.
 // =====================================================================================
 //
