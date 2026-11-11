@@ -1,6 +1,7 @@
 // =====================================================================================
 // v0_sequential.cpp - V0: single-threaded reference implementation of the whole pipeline.
-// Authors: <Member A> (stages 1, 5), Tôn Thất Minh Đăng (stages 2, 6), <Member C> (stages 3, 4)
+// Authors: Quách Châu Hạo Kiệt (stages 1, 5), 
+// Tôn Thất Minh Đăng (stages 2, 6), Phan Thanh Bình (stages 3, 4)
 // =====================================================================================
 //
 // V0 is the reference for correctness and the baseline for every speedup, so:

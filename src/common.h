@@ -1,6 +1,6 @@
 // =====================================================================================
 // common.h - shared types, parameters and deterministic helpers used by EVERY version.
-// Authors: <Member A>, <Member B>, <Member C>
+// Authors: Quách Châu Hạo Kiệt, Tôn Thất Minh Đăng, Phan Thanh Bình
 // Drafted with an AI assistant (Claude) and reviewed by the team; see the AI declaration
 // in the notebook.
 // =====================================================================================
@@ -41,6 +41,7 @@
 
 // =====================================================================================
 // Stages
+// Responsible: Quách Châu Hạo Kiệt 
 // =====================================================================================
 // Index of each pipeline stage. Used to store and print per-stage times (Timing::stage_ms).
 enum Stage {
@@ -59,6 +60,7 @@ static const char* const STAGE_NAMES[NUM_STAGES] = {
 
 // =====================================================================================
 // Data passed between stages
+// Responsible: Quách Châu Hạo Kiệt
 // =====================================================================================
 
 // An 8-bit colour image as loaded from disk.
@@ -98,6 +100,7 @@ struct Match {
 
 // =====================================================================================
 // Parameters
+// Responsible: Tôn Thất Minh Đăng
 // =====================================================================================
 // One set of parameters shared by all versions. Tune them on the small images, then
 // freeze them: the timing comparison is only fair if every version uses the same values.
@@ -133,6 +136,7 @@ struct Params {
 
 // =====================================================================================
 // Results
+// Responsible: Quách Châu Hạo Kiệt
 // =====================================================================================
 
 // Times of ONE run of the pipeline, in milliseconds. main.cu averages several runs.
@@ -156,6 +160,7 @@ struct Result {
 
 // =====================================================================================
 // Deterministic random numbers
+// Responsible: Quách Châu Hạo Kiệt, Phan Thanh Bình
 // =====================================================================================
 // A tiny linear congruential generator (the "Numerical Recipes" constants).
 // We use it instead of std::mt19937 + std::uniform_int_distribution because the standard
@@ -174,6 +179,7 @@ struct Lcg {
 
 // =====================================================================================
 // ORB sampling pattern (used by stage 3)
+// Responsible: Phan Thanh Bình
 // =====================================================================================
 // One BRIEF test compares the brightness at two offsets around a keypoint:
 //   bit = I(p + (x1, y1)) < I(p + (x2, y2))
@@ -204,6 +210,7 @@ inline std::vector<OrbPair> makeOrbPattern(uint32_t seed, int orb_radius) {
 
 // =====================================================================================
 // RANSAC samples (used by stage 5)
+// Responsible: Quách Châu Hạo Kiệt
 // =====================================================================================
 // Returns iters * 4 match indices: hypothesis `it` uses matches
 //   samples[it*4 + 0], samples[it*4 + 1], samples[it*4 + 2], samples[it*4 + 3]
@@ -235,19 +242,23 @@ inline std::vector<int> makeRansacSamples(int num_matches, int iters, uint32_t s
 
 // Helper: clamp v into [lo, hi]. Use it to read pixels outside the image as the nearest edge
 // pixel ("clamp to edge"), e.g. img.data[clampInt(y, 0, h - 1) * w + clampInt(x, 0, w - 1)].
+// Author: Tôn Thất Minh Đăng
 HOST_DEVICE inline int clampInt(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
 // Helper: round to the nearest integer; an exact .5 always rounds up (floor(v + 0.5)).
 // Use THIS everywhere a coordinate is rounded (e.g. rotated ORB offsets), on the CPU and the
 // GPU: lroundf, rintf and __float2int_rn round .5 differently and would make V0 and V1 differ.
+// Author: Tôn Thất Minh Đăng
 HOST_DEVICE inline int roundToInt(float v) { return (int)floorf(v + 0.5f); }
 
 // Helper: clamp v into [lo, hi] for floats. Usable on both host and device.
+// Author: Tôn Thất Minh Đăng
 HOST_DEVICE inline float clampFloat(float v, float lo, float hi) {
     return fminf(fmaxf(v, lo), hi);
 }
 
 // Helper: find distance from a pixel to edge, used in stage 6 to get weights for both images in blending.
+// Author: Tôn Thất Minh Đăng
 HOST_DEVICE inline float edgeDistance(float x, float y, float w, float h) {
     float dx = fminf(x + 1.0f, w - x);
     float dy = fminf(y + 1.0f, h - y);
@@ -265,6 +276,7 @@ HOST_DEVICE inline float edgeDistance(float x, float y, float w, float h) {
 // with w = H6 x + H7 y + H8.
 
 // Applies H to the point (x, y); the result is written to (ox, oy).
+// Responsible: Tôn Thất Minh Đăng
 inline void applyH(const double H[9], double x, double y, double& ox, double& oy) {
     double w = H[6] * x + H[7] * y + H[8];
     ox = (H[0] * x + H[1] * y + H[2]) / w;
@@ -273,6 +285,7 @@ inline void applyH(const double H[9], double x, double y, double& ox, double& oy
 
 // Inverts a 3x3 matrix with the adjugate formula (inverse = adjugate / determinant).
 // Returns false if the matrix is (nearly) singular. Stage 6 needs H^-1 for inverse warping.
+// Responsible: Tôn Thất Minh Đăng
 inline bool invertH(const double H[9], double Hi[9]) {
     double det = H[0] * (H[4] * H[8] - H[5] * H[7]) - H[1] * (H[3] * H[8] - H[5] * H[6]) +
                  H[2] * (H[3] * H[7] - H[4] * H[6]);
@@ -294,6 +307,7 @@ inline bool invertH(const double H[9], double Hi[9]) {
 // maps image B's four corners with H and with a reference G and averages the distances.
 // Used for the synthetic-pair check (G = ground truth, --gt) and to check that a GPU
 // version agrees with V0 (G = V0's H, --ref-h). Below ~2 px is a good result.
+// Responsible: Tôn Thất Minh Đăng
 inline double cornerError(const double H[9], const double G[9], int width, int height) {
     const double cx[4] = {0, (double)width, 0, (double)width};
     const double cy[4] = {0, 0, (double)height, (double)height};
@@ -308,6 +322,7 @@ inline double cornerError(const double H[9], const double G[9], int width, int h
 }
 
 // Custom comparison function for sorting keypoints
+// Responsible: Tôn Thất Minh Đăng
 inline bool customKpComp(const Keypoint& a, const Keypoint& b) {
     if(a.score != b.score) {
         return a.score > b.score;

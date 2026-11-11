@@ -1,6 +1,6 @@
 // =====================================================================================
 // versions.h - the interface every pipeline version implements, and the version table.
-// Authors: <Member A>, <Member B>, <Member C>
+// Authors: Quách Châu Hạo Kiệt
 // Drafted with an AI assistant (Claude) and reviewed by the team; see the AI declaration
 // in the notebook.
 // =====================================================================================

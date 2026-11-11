@@ -1,6 +1,6 @@
 // =====================================================================================
 // main.cu - command line, image I/O, warm-up, repeated runs and the timing report.
-// Authors: <Member A>, <Member B>, <Member C>
+// Responsible: Tôn Thất Minh Đăng
 // Drafted with an AI assistant (Claude) and reviewed by the team; see the AI declaration
 // in the notebook.
 // =====================================================================================
