@@ -676,6 +676,8 @@ static void warpAndBlend(const ImageU8& A, const ImageU8& B, const double H[9], 
     double coordsBx[4];
     double coordsBy[4];
 
+    // use double version of applyH on CPU. On v1+, this wont be transfered to GPU, 
+    // so not a problem.
     applyH(H, 0, 0, coordsBx[0], coordsBy[0]);
     applyH(H, B.width, 0, coordsBx[1], coordsBy[1]);
     applyH(H, 0, B.height, coordsBx[2], coordsBy[2]);
@@ -689,11 +691,12 @@ static void warpAndBlend(const ImageU8& A, const ImageU8& B, const double H[9], 
         maxY = std::max(maxY, coordsBy[i]);
     }
     
-    // clamp the results
-    minX = clampFloat(minX, -2.0 * wA, 3.0 * wA);
-    maxX = clampFloat(maxX, -2.0 * wA, 3.0 * wA);
-    minY = clampFloat(minY, -2.0 * hA, 3.0 * hA);
-    maxY = clampFloat(maxY, -2.0 * hA, 3.0 * hA);
+    // clamp the results, using the std function to clamp directly in double.
+    // this part would not be on the GPU.
+    minX = std::clamp(minX, -2.0 * wA, 3.0 * wA);
+    maxX = std::clamp(maxX, -2.0 * wA, 3.0 * wA);
+    minY = std::clamp(minY, -2.0 * hA, 3.0 * hA);
+    maxY = std::clamp(maxY, -2.0 * hA, 3.0 * hA);
     
     // Compute integer canvas dimensions and offsets
     int ox = (int)floor(minX);
@@ -712,10 +715,14 @@ static void warpAndBlend(const ImageU8& A, const ImageU8& B, const double H[9], 
     // -------------------------------------------
     double Hi[9];
     if (!invertH(H, Hi)) return;
+    // convert Hi to float to match GPU.
+    float Hif[9];
+    for (int i = 0; i < 9; i++) Hif[i] = (float)Hi[i];
 
     // -------------------------------------------
     // 3. Calculate canvas pixel values based on 
     // position in A's coordinate system.
+    // This part will be on the GPU in v1+
     // -------------------------------------------
     for(int r = 0; r < canvasH; r++) {
         for(int c = 0; c < canvasW; c++) {
@@ -724,12 +731,12 @@ static void warpAndBlend(const ImageU8& A, const ImageU8& B, const double H[9], 
             int px = c + ox;
 
             // find position back in B
-            double qx, qy;
-            applyH(Hi, (double)px, (double)py, qx, qy);
+            float qx, qy;
+            applyHf(Hif, (float)px, (float)py, qx, qy);
 
             // blending the two images' color with each other
             // image A weights
-            int colorA[3] = {0, 0, 0};
+            uint8_t colorA[3] = {0, 0, 0};
             float weightA = 0.0f;
             if(px >= 0 && px < wA && py >= 0 && py < hA) {
                 // get color value in A

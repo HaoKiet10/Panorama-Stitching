@@ -265,6 +265,14 @@ HOST_DEVICE inline float edgeDistance(float x, float y, float w, float h) {
     return fminf(dx, dy);
 }
 
+// Homography application on both the CPU and GPU, using float to optimize speed. Maps (x, y) to (ox, oy) using H. The result is written to (ox, oy).
+// Responsible: Tôn Thất Minh Đăng
+HOST_DEVICE inline void applyHf(const float H[9], float x, float y, float& ox, float& oy) {
+    float w = H[6] * x + H[7] * y + H[8];
+    ox = (H[0] * x + H[1] * y + H[2]) / w;
+    oy = (H[3] * x + H[4] * y + H[5]) / w;
+}
+
 // =====================================================================================
 // Homography helpers (host side)
 // =====================================================================================
