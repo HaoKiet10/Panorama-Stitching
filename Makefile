@@ -14,7 +14,7 @@ NVCC  ?= nvcc
 ARCH  ?= -arch=native
 FLAGS ?= -O3 -std=c++17
 
-SRC = src/main.cu src/v0_sequential.cpp src/v1_basic.cu src/v2_tiled.cu src/v3_texture.cu src/stb_impl.cpp
+SRC = src/main.cu src/v0_sequential.cpp src/v1_basic.cu src/v2_tiled.cu src/v3_texture.cu src/v4_streams.cu src/stb_impl.cpp
 HDR = $(wildcard src/*.h src/*.cuh)
 
 # Rebuild when any source or header changes.
