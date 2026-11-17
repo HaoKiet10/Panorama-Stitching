@@ -33,6 +33,7 @@ typedef void (*PipelineFn)(const ImageU8& A, const ImageU8& B, const Params& par
 
 void runV0(const ImageU8& A, const ImageU8& B, const Params& params, Result& result, Timing& timing);  // v0_sequential.cpp
 void runV1(const ImageU8& A, const ImageU8& B, const Params& params, Result& result, Timing& timing);  // v1_basic.cu
+void runV2(const ImageU8& A, const ImageU8& B, const Params& params, Result& result, Timing& timing);  // v2_tiled.cu
 
 // One row per version: the number given to --version, a display name, and the function.
 struct VersionEntry {
@@ -44,5 +45,6 @@ struct VersionEntry {
 static const VersionEntry VERSIONS[] = {
     {0, "V0 sequential", runV0},
     {1, "V1 basic CUDA", runV1},
+    {2, "V2 tiled stencils", runV2},
 };
 static const int NUM_VERSIONS = sizeof(VERSIONS) / sizeof(VERSIONS[0]);
