@@ -26,6 +26,7 @@
 // function AND in the notebook's References section.
 
 #include "versions.h"
+#include "v0_stages.h"   // the stage functions the GPU versions reuse
 
 #include <algorithm>
 #include <chrono>
@@ -112,7 +113,7 @@ static void toGray(const ImageU8& in, ImageF& out) {
 //   returns 2 * radius + 1 weights; weight i (i = -radius..radius) is proportional to
 //   exp(-i^2 / (2 sigma^2)). Divide by the sum so the weights add up to 1
 //   (otherwise the blur changes the image brightness).
-static std::vector<float> gaussianKernel(float sigma, int radius) {
+std::vector<float> gaussianKernel(float sigma, int radius) {
     std::vector<float> k(2 * radius + 1);
     float sum = 0;
 
@@ -344,7 +345,7 @@ static float orientation(const ImageF& img, int cx, int cy, int radius) {
 //          v1 = I(kp + rotated offset 1),  v2 = I(kp + rotated offset 2)
 //          if v1 < v2, set bit i:  desc[k].w[i >> 5] |= 1u << (i & 31)
 //   Use roundToInt (common.h) so the GPU rounds exactly the same way.
-static void describe(const ImageF& img, std::vector<Keypoint>& kps, const std::vector<OrbPair>& pattern, int radius, std::vector<Descriptor>& desc) {
+void describe(const ImageF& img, std::vector<Keypoint>& kps, const std::vector<OrbPair>& pattern, int radius, std::vector<Descriptor>& desc) {
     const int w = img.width;
     const int numTests = (int)pattern.size();  // 256 binary tests -> 8 x 32-bit words
 
@@ -403,7 +404,7 @@ static inline int hamming(const Descriptor& a, const Descriptor& b) {
 //        - ratio test:   best < p.ratio * second   (as floats; accept if B has only 1 point)
 //        - cross-check:  best_of_b[best_b] == a    (skip if p.cross_check is false)
 //      and push {a, best_b, best} in increasing order of a.
-static void matchDescriptors(const std::vector<Descriptor>& dA, const std::vector<Descriptor>& dB, const Params& p, std::vector<Match>& matches) {
+void matchDescriptors(const std::vector<Descriptor>& dA, const std::vector<Descriptor>& dB, const Params& p, std::vector<Match>& matches) {
     matches.clear();
     const int nA = (int)dA.size();
     const int nB = (int)dB.size();
@@ -582,7 +583,7 @@ static int countInliers(const double H[9], const std::vector<double>& src, const
 //   4. If the best count is < 4, return 0 (H stays the identity).
 //   5. Refit: fitHomography on ALL inliers of the best H (least squares). Keep the refit if
 //      it succeeds and has at least as many inliers. Return the final inlier count.
-static int estimateHomography(const std::vector<Keypoint>& kA, const std::vector<Keypoint>& kB, const std::vector<Match>& matches, const Params& p, double H[9]) {
+int estimateHomography(const std::vector<Keypoint>& kA, const std::vector<Keypoint>& kB, const std::vector<Match>& matches, const Params& p, double H[9]) {
     std::vector<double> src, dst;
     src.resize(matches.size() * 2);
     dst.resize(matches.size() * 2);
@@ -652,6 +653,45 @@ static int estimateHomography(const std::vector<Keypoint>& kA, const std::vector
 // owner: Tôn Thất Minh Đăng
 // =====================================================================================
 
+// Canvas of the panorama: A's rectangle extended by B's four corners mapped by H, clamped so
+// a bad H cannot allocate a huge image. Shared with the GPU versions (v0_stages.h), which
+// compute the canvas on the host exactly like V0.
+void computeCanvas(int wA, int hA, int wB, int hB, const double H[9], int& ox, int& oy, int& canvasW, int& canvasH) {
+    // ---------------------------------------
+    // 1. Get canvas size to stitch A and B on
+    // ---------------------------------------
+    double coordsBx[4];
+    double coordsBy[4];
+
+    // use double version of applyH on CPU. On v1+, this wont be transfered to GPU, 
+    // so not a problem.
+    applyH(H, 0, 0, coordsBx[0], coordsBy[0]);
+    applyH(H, wB, 0, coordsBx[1], coordsBy[1]);
+    applyH(H, 0, hB, coordsBx[2], coordsBy[2]);
+    applyH(H, wB, hB, coordsBx[3], coordsBy[3]);
+    
+    double minX = 0, minY = 0, maxX = wA, maxY = hA;
+    for(int i = 0; i < 4; i++) {
+        minX = std::min(minX, coordsBx[i]);
+        minY = std::min(minY, coordsBy[i]);
+        maxX = std::max(maxX, coordsBx[i]);
+        maxY = std::max(maxY, coordsBy[i]);
+    }
+    
+    // clamp the results, using the std function to clamp directly in double.
+    // this part would not be on the GPU.
+    minX = std::clamp(minX, -2.0 * wA, 3.0 * wA);
+    maxX = std::clamp(maxX, -2.0 * wA, 3.0 * wA);
+    minY = std::clamp(minY, -2.0 * hA, 3.0 * hA);
+    maxY = std::clamp(maxY, -2.0 * hA, 3.0 * hA);
+    
+    // Compute integer canvas dimensions and offsets
+    ox = (int)floor(minX);
+    oy = (int)floor(minY);
+    canvasW = (int)ceil(maxX) - ox;
+    canvasH = (int)ceil(maxY) - oy;
+}
+
 // TODO: inverse warping + bilinear sampling + feathering.
 //   A, B  the colour images;  H  maps B -> A;  out  the panorama
 //   1. Canvas: start from A's rectangle [0, wA] x [0, hA] and extend it with B's four
@@ -671,38 +711,10 @@ static int estimateHomography(const std::vector<Keypoint>& kA, const std::vector
 static void warpAndBlend(const ImageU8& A, const ImageU8& B, const double H[9], ImageU8& out) {
     int wA = A.width, hA = A.height, wB = B.width, hB = B.height;
     // ---------------------------------------
-    // 1. Get canvas size to stitch A and B on
+    // 1. Canvas size (computeCanvas, shared with the GPU versions)
     // ---------------------------------------
-    double coordsBx[4];
-    double coordsBy[4];
-
-    // use double version of applyH on CPU. On v1+, this wont be transfered to GPU, 
-    // so not a problem.
-    applyH(H, 0, 0, coordsBx[0], coordsBy[0]);
-    applyH(H, B.width, 0, coordsBx[1], coordsBy[1]);
-    applyH(H, 0, B.height, coordsBx[2], coordsBy[2]);
-    applyH(H, B.width, B.height, coordsBx[3], coordsBy[3]);
-    
-    double minX = 0, minY = 0, maxX = A.width, maxY = A.height;
-    for(int i = 0; i < 4; i++) {
-        minX = std::min(minX, coordsBx[i]);
-        minY = std::min(minY, coordsBy[i]);
-        maxX = std::max(maxX, coordsBx[i]);
-        maxY = std::max(maxY, coordsBy[i]);
-    }
-    
-    // clamp the results, using the std function to clamp directly in double.
-    // this part would not be on the GPU.
-    minX = std::clamp(minX, -2.0 * wA, 3.0 * wA);
-    maxX = std::clamp(maxX, -2.0 * wA, 3.0 * wA);
-    minY = std::clamp(minY, -2.0 * hA, 3.0 * hA);
-    maxY = std::clamp(maxY, -2.0 * hA, 3.0 * hA);
-    
-    // Compute integer canvas dimensions and offsets
-    int ox = (int)floor(minX);
-    int oy = (int)floor(minY);
-    int canvasW  = (int)ceil(maxX) - ox;
-    int canvasH = (int)ceil(maxY) - oy;
+    int ox, oy, canvasW, canvasH;
+    computeCanvas(wA, hA, wB, hB, H, ox, oy, canvasW, canvasH);
 
     // Initialize the output image canvas filled with 0 (black)
     out.width = canvasW;
