@@ -26,8 +26,10 @@
 #include "gpu_common.cuh"
 #include "v1_kernels.cuh"
 #include "v2_kernels.cuh"
+#include "v3_kernels.cuh"   // declarations of this file's kernel and helpers, reused by V4+
 
-// H^-1 (A's frame -> B's frame) as floats, like V0's warpAndBlend.
+// H^-1 (A's frame -> B's frame) as floats, like V0's warpAndBlend. Constant memory belongs
+// to this file, so other versions fill it with uploadInverseH.
 __constant__ float c_Hi[9];
 
 // =====================================================================================
@@ -60,19 +62,25 @@ __global__ void rgbToRgbaKernel(const uint8_t* rgb, uchar4* rgba, int w, int h) 
     rgba[i] = make_uchar4(rgb[i * 3], rgb[i * 3 + 1], rgb[i * 3 + 2], 255);
 }
 
+// Copies H^-1 into c_Hi.
+void uploadInverseH(const float Hi[9], cudaStream_t stream) {
+    CHECK(cudaMemcpyToSymbolAsync(c_Hi, Hi, 9 * sizeof(float), 0, cudaMemcpyHostToDevice, stream));
+}
+
 // Builds a texture of the RGB image d_rgb (w x h) that returns bilinearly interpolated
 // colours as 0..1 floats, with clamp-to-edge outside the image. The caller destroys the
 // texture and frees the array.
-static cudaTextureObject_t makeTexture(const uint8_t* d_rgb, int w, int h, cudaArray_t& arr) {
+cudaTextureObject_t makeTexture(const uint8_t* d_rgb, int w, int h, cudaArray_t& arr, cudaStream_t stream) {
     uchar4* d_rgba;
     CHECK(cudaMalloc(&d_rgba, (size_t)w * h * sizeof(uchar4)));
-    rgbToRgbaKernel<<<gridFor(w, h), BLOCK>>>(d_rgb, d_rgba, w, h);
+    rgbToRgbaKernel<<<gridFor(w, h), BLOCK, 0, stream>>>(d_rgb, d_rgba, w, h);
     CHECK(cudaGetLastError());
 
     cudaChannelFormatDesc fmt = cudaCreateChannelDesc<uchar4>();
     CHECK(cudaMallocArray(&arr, &fmt, w, h));
-    CHECK(cudaMemcpy2DToArray(arr, 0, 0, d_rgba, w * sizeof(uchar4), w * sizeof(uchar4), h,
-                              cudaMemcpyDeviceToDevice));
+    CHECK(cudaMemcpy2DToArrayAsync(arr, 0, 0, d_rgba, w * sizeof(uchar4), w * sizeof(uchar4), h,
+                                   cudaMemcpyDeviceToDevice, stream));
+    CHECK(cudaStreamSynchronize(stream));  // the copy must finish before d_rgba is freed
     CHECK(cudaFree(d_rgba));
 
     cudaResourceDesc res = {};
@@ -192,7 +200,7 @@ void runV3(const ImageU8& A, const ImageU8& B, const Params& p, Result& result, 
     for (int k = 0; k < 9; k++) Hif[k] = (float)Hi[k];
 
     timer.Start();
-    CHECK(cudaMemcpyToSymbol(c_Hi, Hif, sizeof(Hif)));
+    uploadInverseH(Hif);
     timer.Stop();
     t.h2d_ms += timer.Elapsed();
 
