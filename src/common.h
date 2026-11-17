@@ -329,9 +329,9 @@ inline double cornerError(const double H[9], const double G[9], int width, int h
     return sum / 4;
 }
 
-// Custom comparison function for sorting keypoints
+// Custom comparison function for sorting keypoints (HOST_DEVICE: V1 sorts on the GPU with it)
 // Responsible: Tôn Thất Minh Đăng
-inline bool customKpComp(const Keypoint& a, const Keypoint& b) {
+HOST_DEVICE inline bool customKpComp(const Keypoint& a, const Keypoint& b) {
     if(a.score != b.score) {
         return a.score > b.score;
     }
