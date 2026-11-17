@@ -25,10 +25,11 @@
 // the arithmetic (same weights, same clamping, same summation order).
 #include "gpu_common.cuh"
 #include "v1_kernels.cuh"
+#include "v2_kernels.cuh"   // declarations of this file's kernels and helpers, reused by V3+
 
 // The two Gaussian kernels in constant memory: c_K[0] = stage 1 blur, c_K[1] = Harris
-// window. Each has 2 * radius + 1 weights; MAX_TAPS allows radius <= 7.
-#define MAX_TAPS 15
+// window. Each has 2 * radius + 1 weights; MAX_TAPS (v2_kernels.cuh) allows radius <= 7.
+// Constant memory belongs to this file, so other versions fill it with uploadBlurWeights.
 __constant__ float c_K[2][MAX_TAPS];
 
 // =====================================================================================
@@ -71,14 +72,24 @@ __global__ void sobelProductsTiledKernel(const float* img, int w, int h, Params 
 // Host code (provided)
 // =====================================================================================
 
+// Copies the stage 1 blur weights to c_K[0] and the Harris window weights to c_K[1].
+void uploadBlurWeights(const std::vector<float>& blurK, const std::vector<float>& harrisK) {
+    if ((int)blurK.size() > MAX_TAPS || (int)harrisK.size() > MAX_TAPS) {
+        fprintf(stderr, "blur or Harris radius too large for MAX_TAPS (%d)\n", MAX_TAPS);
+        exit(EXIT_FAILURE);
+    }
+    CHECK(cudaMemcpyToSymbol(c_K, blurK.data(), blurK.size() * sizeof(float), 0));
+    CHECK(cudaMemcpyToSymbol(c_K, harrisK.data(), harrisK.size() * sizeof(float), MAX_TAPS * sizeof(float)));
+}
+
 // Separable tiled blur: in -> tmp (rows) -> out (columns), weights c_K[kIdx].
 // The third launch parameter is the dynamic shared memory size of each block.
-static void blurTiledDevice(const float* in, float* tmp, float* out, int w, int h, int kIdx, int radius) {
+void blurTiledDevice(const float* in, float* tmp, float* out, int w, int h, int kIdx, int radius, cudaStream_t stream) {
     const size_t rowTile = (BLOCK.x + 2 * radius) * BLOCK.y * sizeof(float);
     const size_t colTile = BLOCK.x * (BLOCK.y + 2 * radius) * sizeof(float);
-    blurRowsTiledKernel<<<gridFor(w, h), BLOCK, rowTile>>>(in, tmp, w, h, kIdx, radius);
+    blurRowsTiledKernel<<<gridFor(w, h), BLOCK, rowTile, stream>>>(in, tmp, w, h, kIdx, radius);
     CHECK(cudaGetLastError());
-    blurColsTiledKernel<<<gridFor(w, h), BLOCK, colTile>>>(tmp, out, w, h, kIdx, radius);
+    blurColsTiledKernel<<<gridFor(w, h), BLOCK, colTile, stream>>>(tmp, out, w, h, kIdx, radius);
     CHECK(cudaGetLastError());
 }
 
@@ -90,10 +101,6 @@ void runV2(const ImageU8& A, const ImageU8& B, const Params& p, Result& result, 
     const std::vector<float> blurK = gaussianKernel(p.blur_sigma, p.blur_radius);
     const std::vector<float> harrisK = gaussianKernel(p.harris_radius / 3.0f, p.harris_radius);
     const std::vector<OrbPair> pattern = makeOrbPattern(p.orb_seed, p.orb_radius);
-    if ((int)blurK.size() > MAX_TAPS || (int)harrisK.size() > MAX_TAPS) {
-        fprintf(stderr, "V2: blur or Harris radius too large for MAX_TAPS (%d)\n", MAX_TAPS);
-        exit(EXIT_FAILURE);
-    }
 
     const ImageU8* images[2] = {&A, &B};
     uint8_t* d_rgb[2] = {nullptr, nullptr};
@@ -103,8 +110,7 @@ void runV2(const ImageU8& A, const ImageU8& B, const Params& p, Result& result, 
     // ---- copies to the device: the weights into constant memory, both images
     for (int i = 0; i < 2; i++) CHECK(cudaMalloc(&d_rgb[i], images[i]->data.size()));
     timer.Start();
-    CHECK(cudaMemcpyToSymbol(c_K, blurK.data(), blurK.size() * sizeof(float), 0));
-    CHECK(cudaMemcpyToSymbol(c_K, harrisK.data(), harrisK.size() * sizeof(float), MAX_TAPS * sizeof(float)));
+    uploadBlurWeights(blurK, harrisK);
     for (int i = 0; i < 2; i++)
         CHECK(cudaMemcpy(d_rgb[i], images[i]->data.data(), images[i]->data.size(), cudaMemcpyHostToDevice));
     timer.Stop();
