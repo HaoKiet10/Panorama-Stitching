@@ -28,4 +28,4 @@ call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" >nul
 rem ---- compile from the folder this script is in
 cd /d "%~dp0"
 rem /Zc:preprocessor: Thrust (used by V1 for the top-K sort) needs MSVC's standard preprocessor.
-nvcc -O3 -std=c++17 -arch=native -Xcompiler /Zc:preprocessor -o stitch.exe src\main.cu src\v0_sequential.cpp src\v1_basic.cu src\v2_tiled.cu src\v3_texture.cu src\stb_impl.cpp
+nvcc -O3 -std=c++17 -arch=native -Xcompiler /Zc:preprocessor -o stitch.exe src\main.cu src\v0_sequential.cpp src\v1_basic.cu src\v2_tiled.cu src\v3_texture.cu src\v4_streams.cu src\stb_impl.cpp
