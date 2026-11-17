@@ -38,25 +38,11 @@
 // Timing: GPU work is timed with GpuTimer (CUDA events), the CPU stages with
 // std::chrono, copies go to h2d_ms / d2h_ms. cudaMalloc / cudaFree are inside the
 // end-to-end time but outside every stage.
-#include "versions.h"
-#include "cuda_utils.cuh"
-#include "v0_stages.h"
+#include "gpu_common.cuh"   // BLOCK, gridFor, Mat3f, KeypointOrder, msSince, nmsCapacity
+#include "v1_kernels.cuh"    // declarations of this file's kernels, reused by V2+
 
-#include <algorithm>
-#include <chrono>
 #include <thrust/execution_policy.h>
 #include <thrust/sort.h>
-
-// 2-D launch configuration for the per-pixel kernels: 32 x 8 = 256 threads, rows of 32
-// threads so neighbouring threads read neighbouring pixels (coalesced).
-static const dim3 BLOCK(32, 8);
-static dim3 gridFor(int w, int h) { return dim3((w + BLOCK.x - 1) / BLOCK.x, (h + BLOCK.y - 1) / BLOCK.y); }
-
-// A 3x3 float matrix passed to a kernel by value (it lands in the kernel's parameter space,
-// so no copy or device buffer is needed).
-struct Mat3f {
-    float m[9];
-};
 
 // =====================================================================================
 // Stage 1 - grayscale + separable Gaussian blur
@@ -110,18 +96,15 @@ __global__ void nmsCompactKernel(const float* R, int w, int h, int border, int n
                                  int capacity, int* count) {
 }
 
-// Device comparator with V0's order (customKpComp in common.h): score high to low, then
-// y, then x. Provided, for selectTopK.
-struct KeypointOrder {
-    __host__ __device__ bool operator()(const Keypoint& a, const Keypoint& b) const { return customKpComp(a, b); }
-};
-
-// TODO (Bình): sort the n candidates on the device, strongest first, in V0's order:
-//   thrust::sort(thrust::device, cand, cand + n, KeypointOrder());
-//   The host then copies the first min(n, max_keypoints) back (that is V0's top-K cut).
-static void selectTopK(Keypoint* cand, int n) {
+// TODO (Bình): sort the n candidates on the device, strongest first, in V0's order, on the
+//   given stream (V1 uses the default stream 0; V4 runs A and B on two streams):
+//   thrust::sort(thrust::cuda::par.on(stream), cand, cand + n, KeypointOrder());
+//   KeypointOrder (gpu_common.cuh) is V0's customKpComp. The host then copies the first
+//   min(n, max_keypoints) back, which is V0's top-K cut.
+void selectTopK(Keypoint* cand, int n, cudaStream_t stream) {
     (void)cand;
     (void)n;
+    (void)stream;
 }
 
 // =====================================================================================
@@ -141,11 +124,6 @@ __global__ void warpBlendKernel(const uint8_t* A, int wA, int hA, const uint8_t*
 // =====================================================================================
 // Host code (provided)
 // =====================================================================================
-
-using Clock = std::chrono::high_resolution_clock;
-static double msSince(Clock::time_point t0) {
-    return std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
-}
 
 // Separable blur on the device: in -> tmp (rows) -> out (columns). Used by stages 1 and 2.
 static void blurDevice(const float* in, float* tmp, float* out, int w, int h, const float* d_k, int radius) {
@@ -188,9 +166,7 @@ void runV1(const ImageU8& A, const ImageU8& B, const Params& p, Result& result, 
     for (int i = 0; i < 2; i++) {
         const int w = images[i]->width, h = images[i]->height;
         const size_t n = (size_t)w * h;
-        // With the tie rule two survivors of the 3x3 NMS are never neighbours, so at most
-        // one pixel in every 2x2 block survives.
-        const int capacity = ((w + 1) / 2) * ((h + 1) / 2);
+        const int capacity = nmsCapacity(w, h);
 
         float *d_gray, *d_tmp, *d_blur, *d_ixx, *d_iyy, *d_ixy, *d_sxx, *d_syy, *d_sxy, *d_R;
         Keypoint* d_cand;
